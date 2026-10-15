@@ -124,7 +124,9 @@ function OrderTicket({ quote, portfolio, position, onFilled }) {
   const refPrice = type === 'market' ? quote.price : Number(trigger) || quote.price;
   const shares = mode === 'shares' ? Number(amount) || 0 : (Number(amount) || 0) / refPrice;
   const estimate = shares * refPrice;
-  const held = position?.qty ?? 0;
+  const held = position?.qty ?? 0; // negative when short
+  const buyingPower = portfolio?.buyingPower ?? portfolio?.cash ?? 0;
+  const buying = side === 'buy' || side === 'cover';
 
   const submit = async (e) => {
     e.preventDefault();
@@ -139,7 +141,8 @@ function OrderTicket({ quote, portfolio, position, onFilled }) {
       const res = await api.post(`/api/portfolios/${portfolio.id}/orders`, body);
       if (res.status === 'filled' && res.transaction) {
         const t = res.transaction;
-        setMsg({ ok: true, text: `${t.side === 'buy' ? 'Bought' : 'Sold'} ${qty(t.qty)} ${t.symbol} @ ${money(t.price)}${t.reason ? ` (${t.reason})` : ''}` });
+        const verb = { buy: 'Bought', sell: 'Sold', short: 'Shorted', cover: 'Covered' }[t.side];
+        setMsg({ ok: true, text: `${verb} ${qty(t.qty)} ${t.symbol} @ ${money(t.price)}${t.reason ? ` (${t.reason})` : ''}` });
       } else if (res.status === 'filled') {
         setMsg({ ok: true, text: `${type} order filled immediately` });
       } else if (res.status === 'rejected') {
@@ -159,21 +162,27 @@ function OrderTicket({ quote, portfolio, position, onFilled }) {
   if (!portfolio) return null;
 
   const triggerHelp = {
-    limit: side === 'buy' ? 'Buys when price falls to or below this level.' : 'Sells when price rises to or above this level.',
-    stop: side === 'buy' ? 'Buys when price rises to or above this level (breakout entry).' : 'Sells when price falls to or below this level (stop-loss).',
+    limit: buying ? `${side === 'buy' ? 'Buys' : 'Covers'} when price falls to or below this level.` : `${side === 'sell' ? 'Sells' : 'Shorts'} when price rises to or above this level.`,
+    stop: buying
+      ? `${side === 'buy' ? 'Buys' : 'Covers'} when price rises to or above this level${side === 'cover' ? ' (protects a short).' : ' (breakout entry).'}`
+      : `${side === 'sell' ? 'Sells' : 'Shorts'} when price falls to or below this level${side === 'sell' ? ' (stop-loss).' : '.'}`,
+  };
+  const sideHelp = {
+    short: 'Shorting sells borrowed shares. You profit if the price falls and lose if it rises (with no upper limit). Requires 50% margin.',
+    cover: 'Covering buys back shares you shorted, closing the short position.',
   };
 
   return (
     <form className="card ticket" onSubmit={submit}>
       <h3>Trade {quote.symbol}</h3>
       <div className="seg full">
-        <button type="button" className={side === 'buy' ? 'on buy' : ''} onClick={() => setSide('buy')}>
-          Buy
-        </button>
-        <button type="button" className={side === 'sell' ? 'on sell' : ''} onClick={() => setSide('sell')}>
-          Sell
-        </button>
+        {['buy', 'sell', 'short', 'cover'].map((s) => (
+          <button key={s} type="button" className={side === s ? `on ${s === 'buy' || s === 'cover' ? 'buy' : 'sell'}` : ''} onClick={() => setSide(s)}>
+            {s[0].toUpperCase() + s.slice(1)}
+          </button>
+        ))}
       </div>
+      {sideHelp[side] && <p className="hint">{sideHelp[side]}</p>}
       <label>
         Order type
         <select value={type} onChange={(e) => setType(e.target.value)}>
@@ -209,9 +218,18 @@ function OrderTicket({ quote, portfolio, position, onFilled }) {
             Sell all ({qty(held)})
           </button>
         )}
-        {side === 'buy' && (
-          <button type="button" className="ghost small" onClick={() => (setMode('dollars'), setAmount(String(Math.floor(portfolio.cash * 100) / 100)))}>
-            Max ({money(portfolio.cash)})
+        {side === 'cover' && held < 0 && (
+          <button type="button" className="ghost small" onClick={() => (setMode('shares'), setAmount(String(-held)))}>
+            Cover all ({qty(-held)})
+          </button>
+        )}
+        {(side === 'buy' || side === 'short') && buyingPower > 0 && (
+          <button
+            type="button"
+            className="ghost small"
+            onClick={() => (setMode('dollars'), setAmount(String(Math.floor((side === 'short' ? buyingPower * 2 : buyingPower) * 100) / 100)))}
+          >
+            Max ({money(side === 'short' ? buyingPower * 2 : buyingPower)})
           </button>
         )}
       </div>
@@ -219,9 +237,9 @@ function OrderTicket({ quote, portfolio, position, onFilled }) {
         <dt>{mode === 'shares' ? 'Estimated cost' : 'Estimated shares'}</dt>
         <dd>{mode === 'shares' ? money(estimate) : qty(Math.floor(shares * 1e4) / 1e4)}</dd>
         <dt>Buying power</dt>
-        <dd>{money(portfolio.cash)}</dd>
-        <dt>You own</dt>
-        <dd>{qty(held)} shares</dd>
+        <dd>{money(buyingPower)}</dd>
+        <dt>{held < 0 ? 'You are short' : 'You own'}</dt>
+        <dd>{qty(Math.abs(held))} shares</dd>
         {portfolio.commission > 0 && (
           <>
             <dt>Commission</dt>
@@ -230,8 +248,8 @@ function OrderTicket({ quote, portfolio, position, onFilled }) {
         )}
       </dl>
       {!quote.marketOpen && type === 'market' && <p className="hint">Market is closed, so market orders fill at the last price.</p>}
-      <button className={`primary ${side}`} disabled={busy || !(Number(amount) > 0)}>
-        {busy ? 'Placing…' : `${type === 'market' ? '' : `Place ${type} `}${side === 'buy' ? 'Buy' : 'Sell'}`}
+      <button className={`primary ${buying ? 'buy' : 'sell'}`} disabled={busy || !(Number(amount) > 0)}>
+        {busy ? 'Placing…' : `${type === 'market' ? '' : `Place ${type} `}${side[0].toUpperCase() + side.slice(1)}`}
       </button>
       {msg && <p className={msg.ok ? 'success' : 'error'}>{msg.text}</p>}
       <p className="muted small">Trading in “{portfolio.name}”</p>

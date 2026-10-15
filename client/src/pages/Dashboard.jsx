@@ -21,12 +21,15 @@ export function withLiveQuotes(portfolio, quotes) {
       dayChangePercent: q.changePercent,
     };
   });
-  const investedValue = positions.reduce((a, p) => a + p.value, 0);
-  const totalValue = portfolio.cash + investedValue;
+  const longValue = positions.reduce((a, p) => a + Math.max(p.value, 0), 0);
+  const shortValue = positions.reduce((a, p) => a - Math.min(p.value, 0), 0);
+  const totalValue = portfolio.cash + longValue - shortValue;
   return {
     ...portfolio,
     positions,
-    investedValue,
+    longValue,
+    shortValue,
+    buyingPower: portfolio.cash - 1.5 * shortValue,
     totalValue,
     totalPnl: totalValue - portfolio.startingCash,
     totalPnlPct: (totalValue / portfolio.startingCash - 1) * 100,
@@ -122,7 +125,9 @@ export default function Dashboard({ portfolioId, portfolios, selectPortfolio, re
           <Stat label="Total return" value={signedMoney(p.totalPnl)} sub={pct(p.totalPnlPct)} className={tone(p.totalPnl)} />
           <Stat label="Realized P/L" value={signedMoney(p.realizedPnl)} className={tone(p.realizedPnl)} />
           <Stat label="Cash" value={money(p.cash)} />
-          <Stat label="Invested" value={money(p.investedValue)} />
+          <Stat label="Buying power" value={money(p.buyingPower)} />
+          <Stat label="Long positions" value={money(p.longValue)} />
+          {p.shortValue > 0 && <Stat label="Short positions" value={money(-p.shortValue)} className="down" />}
         </div>
         <TimeChart series={equitySeries} height={220} intraday />
       </section>
@@ -154,7 +159,8 @@ export default function Dashboard({ portfolioId, portfolios, selectPortfolio, re
                     <td>
                       <a href={`#/stock/${pos.symbol}`}>
                         <b>{pos.symbol}</b>
-                      </a>
+                      </a>{' '}
+                      {pos.qty < 0 && <span className="tag short">short</span>}
                       <div className="muted small ellipsis">{pos.name}</div>
                     </td>
                     <td className="num">{qty(pos.qty)}</td>
@@ -169,7 +175,7 @@ export default function Dashboard({ portfolioId, portfolios, selectPortfolio, re
                       {signedMoney(pos.unrealizedPnl)}
                       <div className="small">{pct(pos.unrealizedPnlPct)}</div>
                     </td>
-                    <td className="num">{((pos.value / p.totalValue) * 100).toFixed(1)}%</td>
+                    <td className="num">{((Math.abs(pos.value) / p.totalValue) * 100).toFixed(1)}%</td>
                   </tr>
                 ))}
               </tbody>
@@ -201,7 +207,7 @@ export default function Dashboard({ portfolioId, portfolios, selectPortfolio, re
                     <td>
                       <a href={`#/stock/${o.symbol}`}>{o.symbol}</a>
                     </td>
-                    <td className={o.side === 'buy' ? 'up' : 'down'}>
+                    <td className={o.side === 'buy' || o.side === 'cover' ? 'up' : 'down'}>
                       {o.type} {o.side}
                     </td>
                     <td className="num">{qty(o.qty)}</td>
@@ -266,13 +272,13 @@ function Transactions({ transactions, orders }) {
               <td>
                 <a href={`#/stock/${t.symbol}`}>{t.symbol}</a>
               </td>
-              <td className={t.side === 'buy' ? 'up' : 'down'}>{t.side.toUpperCase()}</td>
+              <td className={t.side === 'buy' || t.side === 'cover' ? 'up' : 'down'}>{t.side.toUpperCase()}</td>
               <td className="num">{qty(t.qty)}</td>
               <td className="num">{money(t.price)}</td>
               <td className="num">{money(t.total)}</td>
-              <td className={`num ${tone(t.realizedPnl)}`}>{t.side === 'sell' ? signedMoney(t.realizedPnl) : ''}</td>
+              <td className={`num ${tone(t.realizedPnl)}`}>{t.side === 'sell' || t.side === 'cover' ? signedMoney(t.realizedPnl) : ''}</td>
               <td className="small">
-                <span className={`tag ${t.source}`}>{t.source === 'bot' ? 'bot' : t.orderType}</span>{' '}
+                <span className={`tag ${t.source}`}>{t.source === 'manual' ? t.orderType : t.source}</span>{' '}
                 <span className="muted">{t.reason}</span>
               </td>
             </tr>

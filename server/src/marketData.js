@@ -74,6 +74,8 @@ function toCandles(result) {
 }
 
 export function isMarketOpen(meta, nowSec = Date.now() / 1000) {
+  // Dev/testing switch: treat markets as always open so bots can trade at the last price.
+  if (process.env.FORCE_MARKET_OPEN === '1') return true;
   const regular = meta?.currentTradingPeriod?.regular;
   return Boolean(regular && nowSec >= regular.start && nowSec < regular.end);
 }
@@ -156,6 +158,39 @@ export function search(query) {
         name: r.longname || r.shortname || r.symbol,
         exchange: r.exchDisp,
         type: r.typeDisp,
+      }));
+  });
+}
+
+// Yahoo's predefined live screeners, usable as a dynamic stock source for bots.
+export const SCREENERS = {
+  day_gainers: 'Day gainers',
+  day_losers: 'Day losers',
+  most_actives: 'Most active',
+  small_cap_gainers: 'Small caps with momentum',
+  aggressive_small_caps: 'Aggressive small caps',
+  growth_technology_stocks: 'Growth technology stocks',
+  undervalued_growth_stocks: 'Undervalued growth stocks',
+  undervalued_large_caps: 'Undervalued large caps',
+  most_shorted_stocks: 'Most shorted stocks',
+};
+
+export function getScreener(id, count = 25) {
+  if (!SCREENERS[id]) throw new MarketDataError(`Unknown screener "${id}"`, 400);
+  return cached(`screener:${id}:${count}`, 5 * 60_000, async () => {
+    const url = `${BASE}/v1/finance/screener/predefined/saved?scrIds=${id}&count=${count}`;
+    const json = await fetchJson(url);
+    const quotes = json?.finance?.result?.[0]?.quotes ?? [];
+    return quotes
+      .filter((q) => ['EQUITY', 'ETF'].includes(q.quoteType))
+      .map((q) => ({
+        symbol: q.symbol,
+        name: q.longName || q.shortName || q.symbol,
+        fundamentals: {
+          marketCap: q.marketCap ?? null,
+          pe: q.trailingPE ?? null,
+          dividendYield: q.dividendYield ?? null,
+        },
       }));
   });
 }

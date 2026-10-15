@@ -4,15 +4,15 @@
 import { EventEmitter } from 'node:events';
 import { getDb, save, findPortfolio, newId } from './store.js';
 import { getQuote, getQuotes, normalizeSymbol } from './marketData.js';
-import { applyFill, roundQty, TradeError, marketValue } from './accounting.js';
+import { applyFill, roundQty, TradeError, accountSnapshot, marginCallNeeded } from './accounting.js';
 
 export const events = new EventEmitter(); // 'portfolio' (portfolioId), 'bot' (botId)
 events.setMaxListeners(0);
 
 const MAX_TRANSACTIONS = 5000;
 
-function recordFill(portfolio, { symbol, side, qty, price, orderType, source, botId, reason }) {
-  const fill = applyFill(portfolio, { symbol, side, qty, price, commission: portfolio.commission ?? 0 });
+function recordFill(portfolio, { symbol, side, qty, price, prices, orderType, source, botId, reason }) {
+  const fill = applyFill(portfolio, { symbol, side, qty, price, prices, commission: portfolio.commission ?? 0 });
   const tx = {
     id: newId(),
     time: Date.now(),
@@ -39,7 +39,7 @@ function parseOrder(input) {
   const symbol = normalizeSymbol(input.symbol);
   const side = input.side;
   const type = input.type ?? 'market';
-  if (!['buy', 'sell'].includes(side)) throw new TradeError('Side must be "buy" or "sell"');
+  if (!['buy', 'sell', 'short', 'cover'].includes(side)) throw new TradeError('Side must be buy, sell, short or cover');
   if (!['market', 'limit', 'stop'].includes(type)) throw new TradeError('Type must be market, limit or stop');
   const order = { symbol, side, type };
   if (input.qty != null && input.qty !== '') order.qty = roundQty(Number(input.qty));
@@ -69,12 +69,15 @@ export async function placeOrder(portfolioId, input, { source = 'manual', botId,
     if (!(order.qty > 0)) throw new TradeError('Dollar amount is too small for one share fraction');
   }
 
-  if (order.side === 'sell') {
-    const held = portfolio.positions[order.symbol]?.qty ?? 0;
-    if (order.qty > held + 1e-9) {
-      throw new TradeError(`You only hold ${held} ${order.symbol} (short selling is not supported)`);
-    }
+  const held = portfolio.positions[order.symbol]?.qty ?? 0;
+  if (order.side === 'sell' && order.qty > Math.max(held, 0) + 1e-9) {
+    throw new TradeError(`You only own ${Math.max(held, 0)} ${order.symbol}. To bet against a stock, use Short.`);
   }
+  if (order.side === 'cover' && order.qty > Math.max(-held, 0) + 1e-9) {
+    throw new TradeError(`You are only short ${Math.max(-held, 0)} ${order.symbol}`);
+  }
+  if (order.side === 'buy' && held < 0) throw new TradeError(`You are short ${order.symbol}; use Cover to buy it back`);
+  if (order.side === 'short' && held > 0) throw new TradeError(`You own ${order.symbol}; sell it before shorting`);
 
   if (order.type === 'market') {
     const tx = recordFill(portfolio, {
@@ -82,6 +85,7 @@ export async function placeOrder(portfolioId, input, { source = 'manual', botId,
       side: order.side,
       qty: order.qty,
       price: quote.price,
+      prices: await shortPrices(portfolio),
       orderType: 'market',
       source,
       botId,
@@ -109,6 +113,14 @@ export async function placeOrder(portfolioId, input, { source = 'manual', botId,
   return { status: pending.status, order: pending };
 }
 
+// Live prices of the portfolio's short positions, needed to compute buying power.
+async function shortPrices(portfolio) {
+  const shorts = Object.keys(portfolio.positions).filter((s) => portfolio.positions[s].qty < 0);
+  if (!shorts.length) return {};
+  const quotes = await getQuotes(shorts);
+  return Object.fromEntries(Object.entries(quotes).map(([s, q]) => [s, q.price]));
+}
+
 export function cancelOrder(portfolioId, orderId) {
   const portfolio = findPortfolio(portfolioId);
   const order = portfolio.orders.find((o) => o.id === orderId);
@@ -121,9 +133,11 @@ export function cancelOrder(portfolioId, orderId) {
   return order;
 }
 
+// Buy and cover both buy shares; sell and short both sell them.
 export function isTriggered(order, price) {
-  if (order.type === 'limit') return order.side === 'buy' ? price <= order.limitPrice : price >= order.limitPrice;
-  if (order.type === 'stop') return order.side === 'buy' ? price >= order.stopPrice : price <= order.stopPrice;
+  const buying = order.side === 'buy' || order.side === 'cover';
+  if (order.type === 'limit') return buying ? price <= order.limitPrice : price >= order.limitPrice;
+  if (order.type === 'stop') return buying ? price >= order.stopPrice : price <= order.stopPrice;
   return false;
 }
 
@@ -140,6 +154,7 @@ export async function evaluatePendingOrders(quotes) {
           side: order.side,
           qty: order.qty,
           price: quote.price,
+          prices: Object.fromEntries(Object.entries(quotes).map(([s, q]) => [s, q.price])),
           orderType: order.type,
           source: 'manual',
         });
@@ -163,6 +178,32 @@ export function openOrderSymbols() {
   return syms;
 }
 
+// Force-cover all shorts in any portfolio whose equity has fallen below the
+// maintenance requirement.
+export function checkMarginCalls(quotes) {
+  const prices = Object.fromEntries(Object.entries(quotes).map(([s, q]) => [s, q.price]));
+  for (const portfolio of getDb().portfolios) {
+    if (!marginCallNeeded(portfolio, prices)) continue;
+    for (const [symbol, pos] of Object.entries(portfolio.positions)) {
+      if (pos.qty >= 0 || !prices[symbol]) continue;
+      try {
+        recordFill(portfolio, {
+          symbol,
+          side: 'cover',
+          qty: -pos.qty,
+          price: prices[symbol],
+          prices,
+          orderType: 'market',
+          source: 'system',
+          reason: 'Margin call: equity fell below 30% of short positions',
+        });
+      } catch (err) {
+        console.warn(`Margin call cover failed for ${symbol}:`, err.message);
+      }
+    }
+  }
+}
+
 export function heldSymbols() {
   const syms = new Set();
   for (const p of getDb().portfolios) for (const s of Object.keys(p.positions)) syms.add(s);
@@ -180,6 +221,7 @@ export async function valuePortfolio(portfolio) {
     return {
       symbol,
       name: q?.name ?? symbol,
+      side: pos.qty < 0 ? 'short' : 'long',
       qty: pos.qty,
       avgCost: pos.avgCost,
       price,
@@ -193,8 +235,7 @@ export async function valuePortfolio(portfolio) {
     };
   });
   const prices = Object.fromEntries(positions.map((p) => [p.symbol, p.price]));
-  const totalValue = marketValue(portfolio, prices);
-  const investedValue = positions.reduce((a, p) => a + p.value, 0);
+  const { equity: totalValue, longValue, shortValue, buyingPower } = accountSnapshot(portfolio, prices);
   return {
     id: portfolio.id,
     name: portfolio.name,
@@ -204,11 +245,13 @@ export async function valuePortfolio(portfolio) {
     realizedPnl: portfolio.realizedPnl,
     createdAt: portfolio.createdAt,
     totalValue,
-    investedValue,
+    longValue,
+    shortValue,
+    buyingPower,
     totalPnl: totalValue - portfolio.startingCash,
     totalPnlPct: (totalValue / portfolio.startingCash - 1) * 100,
     dayChange: positions.reduce((a, p) => a + p.dayChange, 0),
-    positions: positions.sort((a, b) => b.value - a.value),
+    positions: positions.sort((a, b) => Math.abs(b.value) - Math.abs(a.value)),
   };
 }
 

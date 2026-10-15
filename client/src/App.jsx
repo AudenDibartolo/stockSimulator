@@ -10,7 +10,7 @@ import Backtest from './pages/Backtest.jsx';
 import Leaderboard from './pages/Leaderboard.jsx';
 
 function useHashRoute() {
-  const read = () => window.location.hash.replace(/^#\/?/, '').split('/');
+  const read = () => window.location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
   const [parts, setParts] = useState(read);
   useEffect(() => {
     const onChange = () => setParts(read());
@@ -78,7 +78,8 @@ function Shell({ route, stockSymbol, watchlist, onWatchlistChange, onHeldSymbols
   const { connected, portfolioVersion } = useLive();
   const portfolios = useFetch('/api/portfolios', [portfolioVersion]);
   const [selectedId, setSelectedId] = useState(() => storage.get('portfolioId'));
-  const [botDraft, setBotDraft] = useState(null); // prefill from "Deploy as bot"
+  const [botDraft, setBotDraft] = useState(null); // backtest → "Deploy as live bot"
+  const [backtestDraft, setBacktestDraft] = useState(null); // bot editor → "Backtest"
 
   const list = portfolios.data ?? [];
   const portfolioId = list.some((p) => p.id === selectedId) ? selectedId : list[0]?.id;
@@ -112,14 +113,29 @@ function Shell({ route, stockSymbol, watchlist, onWatchlistChange, onHeldSymbols
         }
       />
     );
-  } else if (page === 'bots') content = <Bots {...shared} draft={botDraft} clearDraft={() => setBotDraft(null)} />;
+  } else if (page === 'bots') {
+    content = (
+      <Bots
+        route={route}
+        {...shared}
+        draft={botDraft}
+        clearDraft={() => setBotDraft(null)}
+        onBacktest={(draft) => {
+          setBacktestDraft(draft);
+          navigate('/backtest');
+        }}
+      />
+    );
+  }
   else if (page === 'backtest') {
     content = (
       <Backtest
         initialSymbol={route[1]}
+        draft={backtestDraft}
+        clearDraft={() => setBacktestDraft(null)}
         onDeploy={(draft) => {
           setBotDraft(draft);
-          navigate('/bots');
+          navigate('/bots/new');
         }}
       />
     );

@@ -3,7 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { getDb, load, save, flush, findPortfolio, findBot, createPortfolio } from './store.js';
-import { getQuote, getQuotes, getHistory, search, normalizeSymbol, HISTORY_PRESETS } from './marketData.js';
+import { getQuote, getQuotes, getHistory, getScreener, search, normalizeSymbol, HISTORY_PRESETS, SCREENERS } from './marketData.js';
 import {
   placeOrder,
   cancelOrder,
@@ -12,11 +12,15 @@ import {
   snapshotEquity,
   openOrderSymbols,
   heldSymbols,
+  checkMarginCalls,
   events,
 } from './broker.js';
-import { listStrategies, resolveParams, STRATEGIES } from './strategies.js';
 import { runBacktest } from './backtest.js';
-import { createBot, tickAllBots, BOT_INTERVALS, logBot } from './botRunner.js';
+import { createBot, updateBot, tickAllBots, scanBot, logBot, emptyBotState, migrateLegacyBots, mapLimit } from './botRunner.js';
+import { metricCatalog, OPERATORS } from './rules/metrics.js';
+import { validateBotConfig, ACTIONS, SIZINGS, UNIVERSE_SOURCES, DEFAULT_LIMITS, MAX_UNIVERSE } from './rules/validate.js';
+import { BOT_INTERVALS, BACKTEST_RANGES } from './rules/intervals.js';
+import { TEMPLATES, SYMBOL_LISTS } from './rules/templates.js';
 
 const PORT = Number(process.env.PORT) || 3001;
 const QUOTE_TICK_MS = 10_000;
@@ -24,6 +28,7 @@ const BOT_TICK_MS = 30_000;
 const EQUITY_SNAPSHOT_MS = 5 * 60_000;
 
 load();
+migrateLegacyBots();
 const app = express();
 app.use(express.json());
 
@@ -107,7 +112,7 @@ app.post('/api/portfolios/:id/reset', (req, res) => {
   Object.assign(p, { ...fresh, id: p.id, createdAt: Date.now() });
   p.equityHistory.push({ time: Math.floor(Date.now() / 1000), value: p.startingCash });
   for (const bot of getDb().bots.filter((b) => b.portfolioId === p.id)) {
-    bot.state = { qty: 0, avgCost: 0, strategy: {} };
+    bot.state = emptyBotState();
     logBot(bot, 'Portfolio was reset; bot position cleared');
   }
   save();
@@ -123,24 +128,40 @@ app.delete('/api/portfolios/:id/orders/:orderId', (req, res) => {
   res.json(cancelOrder(req.params.id, req.params.orderId));
 });
 
-// ---- Strategies, bots & backtests -----------------------------------------
+// ---- Bot builder, bots & backtests ---------------------------------------
 
-app.get('/api/strategies', (req, res) => {
-  res.json({ strategies: listStrategies(), botIntervals: Object.keys(BOT_INTERVALS) });
+app.get('/api/bot-builder', (req, res) => {
+  res.json({
+    metrics: metricCatalog(),
+    operators: Object.entries(OPERATORS).map(([id, o]) => ({ id, label: o.label })),
+    actions: Object.entries(ACTIONS).map(([id, a]) => ({ id, ...a })),
+    sizings: SIZINGS,
+    sources: UNIVERSE_SOURCES,
+    screeners: SCREENERS,
+    symbolLists: SYMBOL_LISTS,
+    intervals: Object.fromEntries(Object.entries(BOT_INTERVALS).map(([id, i]) => [id, i.label])),
+    backtestRanges: BACKTEST_RANGES,
+    defaultLimits: DEFAULT_LIMITS,
+    maxUniverse: MAX_UNIVERSE,
+    templates: TEMPLATES,
+  });
 });
 
-app.get('/api/bots', (req, res) => {
-  res.json(getDb().bots.map(({ log, ...b }) => ({ ...b, log: log.slice(0, 50) })));
+const botSummary = ({ log, ...b }) => ({ ...b, log: log.slice(0, 100) });
+
+app.get('/api/bots', (req, res) => res.json(getDb().bots.map(botSummary)));
+
+app.post('/api/bots', (req, res) => {
+  const config = validateBotConfig(req.body.config);
+  const bot = createBot({ config, portfolioId: req.body.portfolioId, templateId: req.body.templateId });
+  res.status(201).json(botSummary(bot));
 });
 
-app.post('/api/bots', h(async (req, res) => {
-  const { name, portfolioId, strategy, interval } = req.body;
-  const symbol = normalizeSymbol(req.body.symbol);
-  const params = resolveParams(strategy, req.body.params);
-  await getQuote(symbol); // validate symbol
-  const bot = createBot({ name, portfolioId, strategy, symbol, interval, params });
-  res.status(201).json(bot);
-}));
+app.put('/api/bots/:id', (req, res) => {
+  const bot = findBot(req.params.id);
+  updateBot(bot, validateBotConfig(req.body.config));
+  res.json(botSummary(bot));
+});
 
 app.patch('/api/bots/:id', (req, res) => {
   const bot = findBot(req.params.id);
@@ -150,7 +171,7 @@ app.patch('/api/bots/:id', (req, res) => {
     logBot(bot, bot.active ? 'Bot resumed' : 'Bot paused');
   }
   save();
-  res.json(bot);
+  res.json(botSummary(bot));
 });
 
 app.delete('/api/bots/:id', (req, res) => {
@@ -160,23 +181,60 @@ app.delete('/api/bots/:id', (req, res) => {
   res.status(204).end();
 });
 
-const BACKTEST_INTERVALS = { '1h': ['6mo', '1y', '2y'], '1d': ['6mo', '1y', '2y', '5y', '10y'], '1wk': ['2y', '5y', '10y', 'max'] };
-
-app.post('/api/backtest', h(async (req, res) => {
-  const { strategy, range = '2y', interval = '1d' } = req.body;
-  if (!BACKTEST_INTERVALS[interval]?.includes(range)) {
-    throw Object.assign(new Error(`Range ${range} is not available for ${interval} bars`), { status: 400 });
-  }
-  const symbol = normalizeSymbol(req.body.symbol);
-  const params = resolveParams(strategy, req.body.params);
-  const startingCash = Number(req.body.startingCash ?? 10_000);
-  const commission = Number(req.body.commission ?? 0);
-  const { candles } = await getHistory(symbol, range, interval);
-  const result = runBacktest({ candles, strategyId: strategy, params, startingCash, commission, interval });
-  res.json({ symbol, strategy: STRATEGIES[strategy].name, range, interval, params, candles, ...result });
+// Dry run: evaluate a (possibly unsaved) bot against live data without trading.
+app.post('/api/bots/preview', h(async (req, res) => {
+  const config = validateBotConfig(req.body.config);
+  const portfolio = findPortfolio(req.body.portfolioId);
+  const bot = req.body.botId ? findBot(req.body.botId) : null;
+  const results = await scanBot(config, { portfolio, bot: bot && { ...bot, state: structuredClone(bot.state) }, dryRun: true });
+  res.json({ time: Date.now(), results });
 }));
 
-app.get('/api/backtest/options', (req, res) => res.json(BACKTEST_INTERVALS));
+app.post('/api/backtest', h(async (req, res) => {
+  const config = validateBotConfig(req.body.config);
+  const range = req.body.range ?? '2y';
+  if (!BACKTEST_RANGES[config.interval]?.includes(range)) {
+    throw Object.assign(new Error(`A ${range} period is not available for ${config.interval} bars`), { status: 400 });
+  }
+  const startingCash = Number(req.body.startingCash ?? 10_000);
+  const commission = Number(req.body.commission ?? 0);
+  if (!(startingCash >= 100)) throw Object.assign(new Error('Starting cash must be at least $100'), { status: 400 });
+  if (!(commission >= 0)) throw Object.assign(new Error('Commission cannot be negative'), { status: 400 });
+
+  const warnings = [];
+  const u = config.universe;
+  let entries;
+  if (u.source === 'list') entries = u.symbols.map((symbol) => ({ symbol }));
+  else if (u.source === 'watchlist') entries = getDb().watchlist.slice(0, MAX_UNIVERSE).map((symbol) => ({ symbol }));
+  else if (u.source === 'screener') {
+    entries = await getScreener(u.screener, u.count);
+    warnings.push(
+      "Screener backtests use the stocks on today's screener for the whole period, so they're biased toward stocks that recently did well (look-ahead bias). Fundamentals are also today's values.",
+    );
+  } else {
+    throw Object.assign(new Error("A bot that trades current holdings can't be backtested. Choose specific stocks instead."), { status: 400 });
+  }
+  if (!entries.length) throw Object.assign(new Error('The bot has no stocks to backtest'), { status: 400 });
+
+  const histories = await mapLimit(entries, 6, async (e) => {
+    try {
+      const { candles } = await getHistory(e.symbol, range, config.interval);
+      return { symbol: e.symbol, candles, fundamentals: e.fundamentals };
+    } catch (err) {
+      warnings.push(`${e.symbol}: ${err.message}`);
+      return { symbol: e.symbol, candles: [] };
+    }
+  });
+
+  const result = runBacktest({ config, histories, startingCash, commission });
+  const traded = new Set(result.trades.map((t) => t.symbol));
+  const prices = Object.fromEntries(
+    histories
+      .filter((h) => h.candles.length && (traded.has(h.symbol) || histories.length === 1))
+      .map((h) => [h.symbol, h.candles.map((c) => ({ time: c.time, value: c.close }))]),
+  );
+  res.json({ range, interval: config.interval, warnings, prices, ...result });
+}));
 
 // ---- Live stream (Server-Sent Events) -------------------------------------
 
@@ -220,8 +278,13 @@ events.on('bot', (id) => clients.forEach((c) => send(c, 'bot', { id })));
 
 async function quoteTick() {
   try {
-    const symbols = new Set([...openOrderSymbols()]);
-    if (symbols.size) await evaluatePendingOrders(await getQuotes([...symbols]));
+    const shorts = getDb().portfolios.flatMap((p) => Object.keys(p.positions).filter((s) => p.positions[s].qty < 0));
+    const symbols = new Set([...openOrderSymbols(), ...shorts]);
+    if (symbols.size) {
+      const quotes = await getQuotes([...symbols]);
+      await evaluatePendingOrders(quotes);
+      if (shorts.length) checkMarginCalls(await getQuotes(getDb().portfolios.flatMap((p) => Object.keys(p.positions))));
+    }
     await pushQuotes();
     for (const c of clients) c.res.write(': ping\n\n');
   } catch (err) {

@@ -1,45 +1,56 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { useFetch } from '../live.jsx';
-import { money, pct, qty, tone, date, signedMoney } from '../format.js';
+import { money, pct, qty, tone, date, dateTime, signedMoney } from '../format.js';
+import { useCatalog, configFromTemplate, blankConfig } from '../botText.js';
 import TimeChart from '../components/TimeChart.jsx';
-import StrategyFields, { defaultParams } from '../components/StrategyFields.jsx';
+import BotBuilder from '../components/BotBuilder.jsx';
+import { TemplateDetails } from '../components/TemplatePicker.jsx';
 import { Stat } from './Dashboard.jsx';
 
-export default function Backtest({ initialSymbol, onDeploy }) {
-  const defs = useFetch('/api/strategies');
-  const options = useFetch('/api/backtest/options');
-  const strategies = defs.data?.strategies ?? [];
+function initialConfig(catalog, draft, initialSymbol) {
+  if (draft) return { config: draft.config, templateId: draft.templateId ?? 'blank' };
+  const t = catalog.templates.find((x) => x.id === 'sma');
+  const config = configFromTemplate(t);
+  if (initialSymbol) {
+    config.universe = { ...config.universe, source: 'list', symbols: [initialSymbol.toUpperCase()] };
+    config.limits = { ...config.limits, maxPositionPct: 100 };
+    config.rules = config.rules.map((r) => (r.action.sizing === 'pct_equity' ? { ...r, action: { ...r.action, amount: 100 } } : r));
+  }
+  return { config, templateId: t.id };
+}
 
-  const [form, setForm] = useState({
-    symbol: (initialSymbol || 'SPY').toUpperCase(),
-    strategy: 'smaCrossover',
-    params: {},
-    interval: '1d',
-    range: '2y',
-    startingCash: 10000,
-    commission: 0,
-  });
+export default function Backtest(props) {
+  const { data: catalog, error } = useCatalog();
+  if (error) return <div className="card error">{error.message}</div>;
+  if (!catalog) return <div className="card muted">Loading…</div>;
+  return <BacktestInner catalog={catalog} {...props} />;
+}
+
+function BacktestInner({ catalog, initialSymbol, draft, clearDraft, onDeploy }) {
+  const [{ config, templateId }, setState] = useState(() => initialConfig(catalog, draft, initialSymbol));
+  const [settings, setSettings] = useState({ range: '2y', startingCash: 100000, commission: 0 });
   const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
+  const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (strategies.length && !Object.keys(form.params).length) {
-      setForm((f) => ({ ...f, params: defaultParams(strategies.find((s) => s.id === f.strategy)) }));
-    }
-  }, [strategies, form.params]);
+  const ranges = catalog.backtestRanges[config.interval] ?? [];
+  const range = ranges.includes(settings.range) ? settings.range : ranges.at(-1);
+  const template = catalog.templates.find((t) => t.id === templateId);
 
-  const ranges = options.data?.[form.interval] ?? [];
+  const pickTemplate = (id) => {
+    clearDraft();
+    setResult(null);
+    if (id === 'blank') setState({ config: blankConfig(catalog), templateId: 'blank' });
+    else setState({ config: configFromTemplate(catalog.templates.find((t) => t.id === id)), templateId: id });
+  };
 
-  const run = async (e) => {
-    e?.preventDefault();
+  const run = async () => {
     setBusy(true);
-    setError(null);
+    setErr(null);
     try {
-      setResult(await api.post('/api/backtest', form));
-    } catch (err) {
-      setError(err.message);
+      setResult(await api.post('/api/backtest', { config, ...settings, range }));
+    } catch (e) {
+      setErr(e.message);
     } finally {
       setBusy(false);
     }
@@ -47,142 +58,199 @@ export default function Backtest({ initialSymbol, onDeploy }) {
 
   return (
     <div className="stack">
-      <form className="card" onSubmit={run}>
-        <h2>Backtest a strategy</h2>
+      <section className="card">
+        <h2>Backtest a bot</h2>
         <p className="muted small">
-          Replays a strategy over real historical prices. Orders fill at the close of the bar that triggered them.
+          Replays your bot over real historical prices for every stock it follows, sharing one cash balance like a real portfolio.
+          Orders fill at the close of the bar that triggered them. The benchmark splits the same money equally across the stocks and
+          simply holds them.
         </p>
-        <div className="form-grid">
-          <label>
-            Symbol
-            <input value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value.toUpperCase() })} required />
-          </label>
-          <label>
-            Bar size
-            <select
-              value={form.interval}
-              onChange={(e) => {
-                const interval = e.target.value;
-                const valid = options.data?.[interval] ?? [];
-                setForm({ ...form, interval, range: valid.includes(form.range) ? form.range : valid.at(-1) });
-              }}
-            >
-              <option value="1h">1 hour</option>
-              <option value="1d">1 day</option>
-              <option value="1wk">1 week</option>
-            </select>
-          </label>
-          <label>
-            Period
-            <select value={form.range} onChange={(e) => setForm({ ...form, range: e.target.value })}>
-              {ranges.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Starting cash ($)
-            <input type="number" min="100" step="any" value={form.startingCash} onChange={(e) => setForm({ ...form, startingCash: e.target.value })} />
-          </label>
-          <label>
-            Commission per trade ($)
-            <input type="number" min="0" step="any" value={form.commission} onChange={(e) => setForm({ ...form, commission: e.target.value })} />
-          </label>
+        <label className="inline-label">
+          Start from
+          <select value={templateId ?? 'blank'} onChange={(e) => pickTemplate(e.target.value)}>
+            {catalog.templates.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+            <option value="blank">Blank bot</option>
+          </select>
+        </label>
+        {template && (
+          <details className="template-explainer">
+            <summary>{template.summary}</summary>
+            <TemplateDetails catalog={catalog} template={template} />
+          </details>
+        )}
+        <BotBuilder catalog={catalog} config={config} onChange={(c) => setState((s) => ({ ...s, config: c }))} showName={false} />
+      </section>
+
+      <section className="card sticky-actions">
+        <div className="row between">
+          <div className="row gap">
+            <label className="inline-label">
+              Period
+              <select value={range} onChange={(e) => setSettings({ ...settings, range: e.target.value })}>
+                {ranges.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="inline-label">
+              Starting cash
+              <input type="number" min="100" step="any" value={settings.startingCash} onChange={(e) => setSettings({ ...settings, startingCash: e.target.value })} />
+            </label>
+            <label className="inline-label">
+              Commission / trade
+              <input type="number" min="0" step="any" value={settings.commission} onChange={(e) => setSettings({ ...settings, commission: e.target.value })} />
+            </label>
+          </div>
+          <div className="row gap">
+            {result && <button onClick={() => onDeploy({ config, templateId })}>Deploy as live bot →</button>}
+            <button className="primary" onClick={run} disabled={busy}>
+              {busy ? 'Running…' : 'Run backtest'}
+            </button>
+          </div>
         </div>
-        <StrategyFields
-          strategies={strategies}
-          strategyId={form.strategy}
-          params={form.params}
-          onChange={(strategy, params) => setForm({ ...form, strategy, params })}
-        />
-        <div className="row gap">
-          <button className="primary" disabled={busy || !strategies.length}>
-            {busy ? 'Running…' : 'Run backtest'}
-          </button>
-          {error && <span className="error">{error}</span>}
-        </div>
-      </form>
-      {result && <Results result={result} onDeploy={() => onDeploy({ symbol: result.symbol, strategy: form.strategy, params: form.params })} />}
+        {err && <p className="error">{err}</p>}
+      </section>
+
+      {result && <Results result={result} />}
     </div>
   );
 }
 
-function Results({ result, onDeploy }) {
+function Results({ result }) {
   const m = result.metrics;
   const beat = m.totalReturnPct - m.benchmarkReturnPct;
+  const priced = Object.keys(result.prices);
+  const [symbol, setSymbol] = useState(priced[0]);
+  const shown = result.prices[symbol] ? symbol : priced[0];
+  const intraday = ['5m', '15m', '1h'].includes(result.interval);
+  const when = intraday ? (t) => dateTime(t * 1000) : date;
 
   const equitySeries = useMemo(
     () => [
       { type: 'line', data: result.benchmark, color: '#8b95a7', title: 'Buy & hold' },
-      { type: 'line', data: result.equity, color: '#60a5fa', title: 'Strategy' },
+      { type: 'line', data: result.equity, color: '#60a5fa', title: 'Bot' },
     ],
     [result],
   );
   const priceSeries = useMemo(
-    () => [
-      {
-        type: 'line',
-        data: result.candles.map((c) => ({ time: c.time, value: c.close })),
-        color: '#cbd5e1',
-        markers: result.trades.map((t) => ({ time: t.time, side: t.side, text: t.side === 'buy' ? 'B' : 'S' })),
-      },
-    ],
-    [result],
+    () =>
+      shown
+        ? [
+            {
+              type: 'line',
+              data: result.prices[shown],
+              color: '#cbd5e1',
+              markers: result.trades
+                .filter((t) => t.symbol === shown)
+                .map((t) => ({ time: t.time, side: t.side === 'buy' || t.side === 'cover' ? 'buy' : 'sell', text: t.side[0].toUpperCase() })),
+            },
+          ]
+        : [],
+    [result, shown],
   );
 
   return (
     <>
       <section className="card">
-        <div className="row between">
-          <h3>
-            {result.strategy} on {result.symbol} · {result.range} of {result.interval} bars
-          </h3>
-          <button onClick={onDeploy}>Deploy as live bot →</button>
-        </div>
+        <h3>
+          Results · {result.range} of {result.interval} bars · {result.symbols.length} stock{result.symbols.length === 1 ? '' : 's'}
+        </h3>
+        {result.warnings.map((w, i) => (
+          <p key={i} className="warn small">
+            ⚠ {w}
+          </p>
+        ))}
         <div className="stats">
           <Stat label="Final value" value={money(m.finalValue)} sub={pct(m.totalReturnPct)} className={tone(m.totalReturnPct)} />
           <Stat label="Buy & hold" value={pct(m.benchmarkReturnPct)} className={tone(m.benchmarkReturnPct)} />
           <Stat label="vs. buy & hold" value={pct(beat)} className={tone(beat)} />
-          <Stat label="CAGR" value={pct(m.cagrPct)} className={tone(m.cagrPct)} />
+          <Stat label="Yearly growth (CAGR)" value={m.cagrPct == null ? '—' : pct(m.cagrPct)} className={tone(m.cagrPct)} />
           <Stat label="Max drawdown" value={pct(m.maxDrawdownPct)} className="down" />
           <Stat label="Sharpe ratio" value={m.sharpe.toFixed(2)} />
-          <Stat label="Trades" value={m.tradeCount} sub={m.winRatePct == null ? 'no closed trades' : `${m.winRatePct.toFixed(0)}% winners`} />
+          <Stat label="Trades" value={m.tradeCount} sub={m.winRatePct == null ? 'no closed trades' : `${m.winRatePct.toFixed(0)}% of exits profitable`} />
         </div>
-        <h4>Equity: strategy vs. buy &amp; hold</h4>
-        <TimeChart series={equitySeries} height={260} intraday={result.interval === '1h'} />
-        <h4>Price &amp; trades</h4>
-        <TimeChart series={priceSeries} height={260} intraday={result.interval === '1h'} />
+        <p className="hint">
+          Max drawdown is the worst peak-to-trough drop. Sharpe ratio measures return per unit of risk; above 1 is good.
+        </p>
+        <h4>Portfolio value: bot vs. buy &amp; hold</h4>
+        <TimeChart series={equitySeries} height={260} intraday={intraday} />
       </section>
+
       <section className="card">
-        <h3>Trades</h3>
+        <h3>By stock</h3>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Stock</th>
+                <th className="num">Trades</th>
+                <th className="num">Realized P/L</th>
+                <th className="num">Still holding</th>
+                <th className="num">Stock's own return</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.symbols.map((s) => (
+                <tr key={s.symbol} className={result.prices[s.symbol] ? 'clickable' : ''} onClick={() => result.prices[s.symbol] && setSymbol(s.symbol)}>
+                  <td>
+                    <b>{s.symbol}</b> {s.symbol === shown && <span className="tag">charted</span>}
+                  </td>
+                  <td className="num">{s.trades}</td>
+                  <td className={`num ${tone(s.realizedPnl)}`}>{signedMoney(s.realizedPnl)}</td>
+                  <td className="num">{s.openQty ? qty(s.openQty) : '—'}</td>
+                  <td className={`num ${tone(s.buyHoldPct)}`}>{pct(s.buyHoldPct)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {shown && (
+          <>
+            <h4>{shown} price with the bot's trades (▲ buy/cover, ▼ sell/short)</h4>
+            <TimeChart series={priceSeries} height={260} intraday={intraday} />
+          </>
+        )}
+      </section>
+
+      <section className="card">
+        <h3>Trades {result.trades.length > 300 && <span className="muted small">(latest 300 of {result.trades.length})</span>}</h3>
         {result.trades.length === 0 ? (
-          <p className="muted">The strategy never triggered in this period. Try different parameters or a longer period.</p>
+          <p className="muted">The bot never traded in this period. Use Preview on the Bots page to see which conditions are failing, or loosen the rules.</p>
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>Date</th>
-                  <th>Side</th>
+                  <th>Stock</th>
+                  <th>Action</th>
                   <th className="num">Shares</th>
                   <th className="num">Price</th>
                   <th className="num">Realized</th>
-                  <th>Reason</th>
+                  <th>Why</th>
                 </tr>
               </thead>
               <tbody>
-                {result.trades.map((t, i) => (
-                  <tr key={i}>
-                    <td>{date(t.time)}</td>
-                    <td className={t.side === 'buy' ? 'up' : 'down'}>{t.side.toUpperCase()}</td>
-                    <td className="num">{qty(t.qty)}</td>
-                    <td className="num">{money(t.price)}</td>
-                    <td className={`num ${tone(t.realizedPnl)}`}>{t.side === 'sell' ? signedMoney(t.realizedPnl) : ''}</td>
-                    <td className="muted small">{t.reason}</td>
-                  </tr>
-                ))}
+                {result.trades
+                  .slice(-300)
+                  .reverse()
+                  .map((t, i) => (
+                    <tr key={i}>
+                      <td>{when(t.time)}</td>
+                      <td>{t.symbol}</td>
+                      <td className={t.side === 'buy' || t.side === 'cover' ? 'up' : 'down'}>{t.side.toUpperCase()}</td>
+                      <td className="num">{qty(t.qty)}</td>
+                      <td className="num">{money(t.price)}</td>
+                      <td className={`num ${tone(t.realizedPnl)}`}>{t.side === 'sell' || t.side === 'cover' ? signedMoney(t.realizedPnl) : ''}</td>
+                      <td className="muted small">{t.reason}</td>
+                    </tr>
+                  ))}
               </tbody>
             </table>
           </div>
