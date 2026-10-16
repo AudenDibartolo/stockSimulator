@@ -182,7 +182,14 @@ function OrderTicket({ quote, portfolio, position, onFilled }) {
           </button>
         ))}
       </div>
-      {sideHelp[side] && <p className="hint">{sideHelp[side]}</p>}
+      {sideHelp[side] && (
+        <p className="hint">
+          {sideHelp[side]}{' '}
+          <a href={`#/docs/${side === 'short' ? 'action-short' : 'action-cover'}`} target="_blank" rel="noopener noreferrer">
+            Learn more →
+          </a>
+        </p>
+      )}
       <label>
         Order type
         <select value={type} onChange={(e) => setType(e.target.value)}>

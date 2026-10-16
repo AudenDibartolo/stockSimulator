@@ -16,6 +16,7 @@ A paper-trading stock simulator that uses real, live market data. You trade with
 - **Templates**: seven ready-made bots, each with a full explanation (how it works, what it's good for, what to watch out for). They are dollar-cost averaging, moving-average crossover, RSI mean reversion, channel breakout, screener momentum, shorting overbought spikes, and buying dips in low-volatility stocks. Every template opens in the builder so you can change it.
 - **Preview (dry run)**: runs a bot once against live data without trading. For each stock it shows which filters and conditions passed, with the actual values.
 - **Backtester**: replays any bot over real history for every stock in its universe, sharing one cash balance. It reports CAGR, max drawdown, Sharpe ratio and win rate, compares against an equal-weight buy & hold, breaks results down per stock, and marks trades on a price chart. You can deploy a backtested bot live in one click.
+- **Bot guide** (`#/docs`): a searchable, illustrated explanation of every bot option in plain English. Each option in the bot builder has a **?** link that opens its topic in a new tab. Content lives in `client/src/docs/topics.jsx` and illustrations in `client/src/docs/figures.jsx`. When you add a metric, add a `metric-<id>` topic too.
 - **Leaderboard** that compares your portfolios. Give each strategy its own portfolio to see which one performs best.
 
 ## Running it

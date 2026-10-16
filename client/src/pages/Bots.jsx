@@ -6,6 +6,7 @@ import { useCatalog, describeConfig, universeText, configFromTemplate, blankConf
 import BotBuilder from '../components/BotBuilder.jsx';
 import TemplatePicker, { TemplateDetails } from '../components/TemplatePicker.jsx';
 import ScanResults from '../components/ScanResults.jsx';
+import HelpLink from '../components/HelpLink.jsx';
 
 export default function Bots({ route, portfolios, portfolioId, draft, clearDraft, onBacktest }) {
   const { data: catalog, error } = useCatalog();
@@ -41,7 +42,9 @@ function BotList({ catalog, portfolios }) {
       <section className="card">
         <div className="row between">
           <div>
-            <h2>Trading bots</h2>
+            <h2>
+              Trading bots <HelpLink topic="what-is-a-bot" label="how bots work" />
+            </h2>
             <p className="muted small">
               A bot follows a set of stocks and checks its rules every 30 seconds against live prices. Each rule acts at most once per
               bar for each stock. Bots only trade while the market is open. To compare bots fairly, give each one its own portfolio and
@@ -250,7 +253,13 @@ function BotEditor({ catalog, editId, portfolios, defaultPortfolioId, draft, cle
           <h2>New bot</h2>
           <a href="#/bots">Cancel</a>
         </div>
-        <p className="muted">Pick a ready-made strategy to start from. You can change every part of it afterwards.</p>
+        <p className="muted">
+          Pick a ready-made strategy to start from. You can change every part of it afterwards. New to this? Read the{' '}
+          <a href="#/docs/what-is-a-bot" target="_blank" rel="noopener noreferrer">
+            bot guide
+          </a>
+          .
+        </p>
         <TemplatePicker
           catalog={catalog}
           onPick={(t) => setState({ config: configFromTemplate(t), templateId: t.id })}
@@ -303,6 +312,7 @@ function BotEditor({ catalog, editId, portfolios, defaultPortfolioId, draft, cle
             <button onClick={runPreview} disabled={Boolean(busy)} title="Run the bot once against live data without trading">
               {busy === 'preview' ? 'Checking…' : 'Preview (dry run)'}
             </button>
+            <HelpLink topic="preview" label="preview" />
             <button onClick={() => onBacktest({ config: state.config, templateId: state.templateId })} disabled={Boolean(busy)}>
               Backtest
             </button>
@@ -316,7 +326,9 @@ function BotEditor({ catalog, editId, portfolios, defaultPortfolioId, draft, cle
 
       {preview && (
         <section className="card">
-          <h3>Preview</h3>
+          <h3>
+            Preview <HelpLink topic="preview" label="reading the preview" />
+          </h3>
           <ScanResults scan={preview} dryRun />
         </section>
       )}

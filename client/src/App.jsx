@@ -8,6 +8,7 @@ import StockPage from './pages/StockPage.jsx';
 import Bots from './pages/Bots.jsx';
 import Backtest from './pages/Backtest.jsx';
 import Leaderboard from './pages/Leaderboard.jsx';
+import Docs from './pages/Docs.jsx';
 
 function useHashRoute() {
   const read = () => window.location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
@@ -98,7 +99,7 @@ function Shell({ route, stockSymbol, watchlist, onWatchlistChange, onHeldSymbols
   const shared = { portfolios: list, portfolioId, selectPortfolio, reloadPortfolios: portfolios.reload };
 
   let content;
-  if (!portfolioId) content = <div className="card muted">{portfolios.error?.message ?? 'Loading…'}</div>;
+  if (!portfolioId && page !== 'docs') content = <div className="card muted">{portfolios.error?.message ?? 'Loading…'}</div>;
   else if (page === 'stock' && stockSymbol) {
     content = (
       <StockPage
@@ -140,6 +141,7 @@ function Shell({ route, stockSymbol, watchlist, onWatchlistChange, onHeldSymbols
       />
     );
   } else if (page === 'leaderboard') content = <Leaderboard {...shared} />;
+  else if (page === 'docs') content = <Docs topicId={route[1]} />;
   else content = <Dashboard {...shared} />;
 
   const nav = [
@@ -147,6 +149,7 @@ function Shell({ route, stockSymbol, watchlist, onWatchlistChange, onHeldSymbols
     ['bots', 'Bots'],
     ['backtest', 'Backtest'],
     ['leaderboard', 'Leaderboard'],
+    ['docs', 'Guide'],
   ];
 
   return (
@@ -178,9 +181,9 @@ function Shell({ route, stockSymbol, watchlist, onWatchlistChange, onHeldSymbols
           {connected ? 'LIVE' : 'OFFLINE'}
         </span>
       </header>
-      <div className="layout">
+      <div className={`layout ${page === 'docs' ? 'full' : ''}`}>
         <main>{content}</main>
-        <Watchlist symbols={watchlist} onChange={onWatchlistChange} current={stockSymbol} />
+        {page !== 'docs' && <Watchlist symbols={watchlist} onChange={onWatchlistChange} current={stockSymbol} />}
       </div>
       <footer className="muted">
         Simulated trading with virtual money. Market data from Yahoo Finance, may be delayed. Not investment advice.

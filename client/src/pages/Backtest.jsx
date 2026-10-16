@@ -6,6 +6,7 @@ import TimeChart from '../components/TimeChart.jsx';
 import BotBuilder from '../components/BotBuilder.jsx';
 import { TemplateDetails } from '../components/TemplatePicker.jsx';
 import { Stat } from './Dashboard.jsx';
+import HelpLink from '../components/HelpLink.jsx';
 
 function initialConfig(catalog, draft, initialSymbol) {
   if (draft) return { config: draft.config, templateId: draft.templateId ?? 'blank' };
@@ -59,7 +60,9 @@ function BacktestInner({ catalog, initialSymbol, draft, clearDraft, onDeploy }) 
   return (
     <div className="stack">
       <section className="card">
-        <h2>Backtest a bot</h2>
+        <h2>
+          Backtest a bot <HelpLink topic="backtest" label="backtesting" />
+        </h2>
         <p className="muted small">
           Replays your bot over real historical prices for every stock it follows, sharing one cash balance like a real portfolio.
           Orders fill at the close of the bar that triggered them. The benchmark splits the same money equally across the stocks and
@@ -159,7 +162,8 @@ function Results({ result }) {
     <>
       <section className="card">
         <h3>
-          Results · {result.range} of {result.interval} bars · {result.symbols.length} stock{result.symbols.length === 1 ? '' : 's'}
+          Results · {result.range} of {result.interval} bars · {result.symbols.length} stock{result.symbols.length === 1 ? '' : 's'}{' '}
+          <HelpLink topic="backtest-results" label="reading results" />
         </h3>
         {result.warnings.map((w, i) => (
           <p key={i} className="warn small">

@@ -1,5 +1,6 @@
 // Visual editor for rule-based bots: which stocks → when → what to do → limits.
 import SymbolSearch from './SymbolSearch.jsx';
+import HelpLink from './HelpLink.jsx';
 import { metricById, newCondition, newRule, describeConfig } from '../botText.js';
 
 const set = (obj, patch) => ({ ...obj, ...patch });
@@ -24,7 +25,9 @@ export default function BotBuilder({ catalog, config, onChange, showName = true 
           </label>
         )}
         <label>
-          Bar size
+          <span>
+            Bar size <HelpLink topic="bars" label="bar size" />
+          </span>
           <select value={config.interval} onChange={(e) => update({ interval: e.target.value })}>
             {Object.entries(catalog.intervals).map(([id, label]) => (
               <option key={id} value={id}>
@@ -36,9 +39,11 @@ export default function BotBuilder({ catalog, config, onChange, showName = true 
         </label>
       </div>
 
-      <Step n={1} title="Which stocks" subtitle="Where the bot looks for opportunities.">
+      <Step n={1} title="Which stocks" subtitle="Where the bot looks for opportunities." help={`source-${config.universe.source}`}>
         <UniverseEditor catalog={catalog} universe={config.universe} onChange={updateUniverse} />
-        <h5>Stock filters (optional)</h5>
+        <h5>
+          Stock filters (optional) <HelpLink topic="filters" label="stock filters" />
+        </h5>
         <p className="hint">
           Narrow the list down by characteristics like price, volatility or volume. Stocks the bot already holds always stay in so
           their exit rules keep running.
@@ -52,7 +57,7 @@ export default function BotBuilder({ catalog, config, onChange, showName = true 
         />
       </Step>
 
-      <Step n={2} title="When and what to do" subtitle="Rules are checked in order for each stock, and the first rule that matches acts.">
+      <Step n={2} title="When and what to do" subtitle="Rules are checked in order for each stock, and the first rule that matches acts." help="rules">
         {config.rules.map((rule, i) => (
           <RuleEditor
             key={rule.id}
@@ -70,7 +75,7 @@ export default function BotBuilder({ catalog, config, onChange, showName = true 
         </button>
       </Step>
 
-      <Step n={3} title="Safety limits" subtitle="Applied to every rule. Stop-loss and take-profit are checked before any rule.">
+      <Step n={3} title="Safety limits" subtitle="Applied to every rule. Stop-loss and take-profit are checked before any rule." help="limit-stopLossPct">
         <LimitsEditor limits={config.limits} onChange={(limits) => update({ limits })} />
       </Step>
 
@@ -86,11 +91,11 @@ export default function BotBuilder({ catalog, config, onChange, showName = true 
   );
 }
 
-function Step({ n, title, subtitle, children }) {
+function Step({ n, title, subtitle, help, children }) {
   return (
     <section className="step">
       <h4>
-        <span className="step-n">{n}</span> {title}
+        <span className="step-n">{n}</span> {title} {help && <HelpLink topic={help} label={title} />}
       </h4>
       {subtitle && <p className="hint">{subtitle}</p>}
       {children}
@@ -109,7 +114,8 @@ function UniverseEditor({ catalog, universe, onChange }) {
             {label}
           </button>
         ))}
-      </div>
+      </div>{' '}
+      <HelpLink topic={`source-${universe.source}`} label={catalog.sources[universe.source]} />
 
       {universe.source === 'list' && (
         <>
@@ -128,6 +134,7 @@ function UniverseEditor({ catalog, universe, onChange }) {
             <div className="grow">
               <SymbolSearch placeholder="Add a stock…" onSelect={(s) => add([s])} />
             </div>
+            <HelpLink topic="source-list" label="ready-made lists" />
             <select value="" onChange={(e) => e.target.value && add(catalog.symbolLists.find((l) => l.id === e.target.value).symbols)}>
               <option value="">Add a list…</option>
               {catalog.symbolLists.map((l) => (
@@ -150,7 +157,9 @@ function UniverseEditor({ catalog, universe, onChange }) {
         <>
           <div className="form-grid">
             <label>
-              Screener
+              <span>
+                Screener <HelpLink topic="source-screener" label="screeners" />
+              </span>
               <select value={universe.screener} onChange={(e) => onChange({ screener: e.target.value })}>
                 {Object.entries(catalog.screeners).map(([id, label]) => (
                   <option key={id} value={id}>
@@ -190,6 +199,7 @@ function RuleEditor({ index, count, catalog, rule, onChange, onMove, onRemove })
       <div className="rule-head">
         <span className="rule-n">Rule {index + 1}</span>
         <input className="rule-name" value={rule.name} onChange={(e) => onChange({ ...rule, name: e.target.value })} />
+        <HelpLink topic="rules" label="rules" />
         <button type="button" className="icon-btn" disabled={index === 0} onClick={() => onMove(-1)} title="Move up">
           ↑
         </button>
@@ -225,7 +235,7 @@ export function GroupEditor({ catalog, group, onChange, lead, empty }) {
             <option value="all">all</option>
             <option value="any">any</option>
           </select>{' '}
-          of these are true:
+          of these are true: <HelpLink topic="all-any" label="all vs. any" />
         </div>
       )}
       {conditions.map((c, i) => (
@@ -260,6 +270,7 @@ function ConditionRow({ catalog, condition, onChange, onRemove }) {
             </option>
           ))}
         </select>
+        <HelpLink topic={condition.op.startsWith('crosses') ? 'op-crosses' : 'op-compare'} label="comparisons" />
         <OperandEditor catalog={catalog} operand={condition.right} onChange={(right) => onChange({ ...condition, right })} allowNumber unit={leftMetric?.unit} />
         <button type="button" className="icon-btn danger" onClick={onRemove} title="Remove condition">
           ×
@@ -267,7 +278,10 @@ function ConditionRow({ catalog, condition, onChange, onRemove }) {
       </div>
       {help.map((m) => (
         <span key={m.id} className="hint">
-          <b>{m.label}:</b> {m.description}
+          <b>{m.label}:</b> {m.description}{' '}
+          <a href={`#/docs/metric-${m.id}`} target="_blank" rel="noopener noreferrer" className="learn-more">
+            Learn more →
+          </a>
         </span>
       ))}
     </div>
@@ -349,6 +363,7 @@ function ActionEditor({ catalog, action, onChange }) {
           </option>
         ))}
       </select>
+      <HelpLink topic={`action-${action.type}`} label={def.label} />
       {action.sizing !== 'all' && (
         <span className="with-unit">
           {action.sizing === 'dollars' && <span className="unit">$</span>}
@@ -363,6 +378,7 @@ function ActionEditor({ catalog, action, onChange }) {
           </option>
         ))}
       </select>
+      <HelpLink topic="sizing" label="order size" />
       {action.type === 'short' && <span className="hint">Short = sell borrowed shares, profit if the price falls. Needs 50% margin.</span>}
     </div>
   );
@@ -371,7 +387,9 @@ function ActionEditor({ catalog, action, onChange }) {
 function LimitsEditor({ limits, onChange }) {
   const field = (key, label, hint, props = {}) => (
     <label>
-      {label}
+      <span>
+        {label} <HelpLink topic={`limit-${key}`} label={label} />
+      </span>
       <input type="number" step="any" min="0" value={limits[key]} onChange={(e) => onChange({ ...limits, [key]: e.target.value })} {...props} />
       <span className="hint">{hint}</span>
     </label>
