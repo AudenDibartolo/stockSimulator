@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api.js';
-import { LiveProvider, useLive, useFetch } from './live.jsx';
+import { LiveProvider, useLive, useFetch, useOnline } from './live.jsx';
 import Watchlist from './components/Watchlist.jsx';
 import SymbolSearch from './components/SymbolSearch.jsx';
 import Dashboard from './pages/Dashboard.jsx';
@@ -77,6 +77,7 @@ export default function App() {
 
 function Shell({ route, stockSymbol, watchlist, onWatchlistChange, onHeldSymbols }) {
   const { connected, portfolioVersion } = useLive();
+  const online = useOnline();
   const portfolios = useFetch('/api/portfolios', [portfolioVersion]);
   const [selectedId, setSelectedId] = useState(() => storage.get('portfolioId'));
   const [botDraft, setBotDraft] = useState(null); // backtest → "Deploy as live bot"
@@ -177,10 +178,19 @@ function Shell({ route, stockSymbol, watchlist, onWatchlistChange, onHeldSymbols
             ))}
           </select>
         )}
-        <span className={`live-dot ${connected ? 'on' : ''}`} title={connected ? 'Live data connected' : 'Reconnecting…'}>
-          {connected ? 'LIVE' : 'OFFLINE'}
+        <span
+          className={`live-dot ${connected && online ? 'on' : ''}`}
+          title={!online ? 'No internet connection' : connected ? 'Live data connected' : 'Trying to reconnect to the server…'}
+        >
+          {!online ? 'OFFLINE' : connected ? 'LIVE' : 'RECONNECTING'}
         </span>
       </header>
+      {!online && (
+        <div className="offline-banner" role="status">
+          <b>No internet connection.</b> Prices aren't updating, and trades, bots and backtests can't run until you're back online. Your
+          portfolio is safe.
+        </div>
+      )}
       <div className={`layout ${page === 'docs' ? 'full' : ''}`}>
         <main>{content}</main>
         {page !== 'docs' && <Watchlist symbols={watchlist} onChange={onWatchlistChange} current={stockSymbol} />}

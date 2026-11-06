@@ -25,6 +25,16 @@ export function LiveProvider({ symbols, children }) {
     return () => es.close();
   }, [key]);
 
+  // After reconnecting, refresh anything that may have changed while offline.
+  useEffect(() => {
+    const refresh = () => {
+      setPortfolioVersion((v) => v + 1);
+      setBotVersion((v) => v + 1);
+    };
+    window.addEventListener('online', refresh);
+    return () => window.removeEventListener('online', refresh);
+  }, []);
+
   const value = useMemo(
     () => ({ quotes, connected, portfolioVersion, botVersion }),
     [quotes, connected, portfolioVersion, botVersion],
@@ -33,6 +43,22 @@ export function LiveProvider({ symbols, children }) {
 }
 
 export const useLive = () => useContext(LiveContext);
+
+// Whether the browser thinks it has a network connection.
+export function useOnline() {
+  const [online, setOnline] = useState(() => navigator.onLine);
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => {
+      window.removeEventListener('online', on);
+      window.removeEventListener('offline', off);
+    };
+  }, []);
+  return online;
+}
 
 // Fetch JSON from the API, re-fetching whenever `url` or any of `deps` change.
 export function useFetch(url, deps = []) {

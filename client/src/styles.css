@@ -336,3 +336,10 @@ mark { background: #f59e0b44; color: inherit; border-radius: 2px; padding: 0 1px
   .docs-nav:not(.open) .toc { display: none; }
   .docs-nav.open .toc { max-height: 60vh; }
 }
+
+/* Offline */
+.offline-banner {
+  background: #3b2a0b; color: #fcd9a0; border-bottom: 1px solid #f59e0b55;
+  padding: 8px 20px; font-size: 0.88rem; position: sticky; top: 49px; z-index: 15;
+}
+.search-error { padding: 8px 10px; color: #fcd9a0; font-size: 0.85rem; }

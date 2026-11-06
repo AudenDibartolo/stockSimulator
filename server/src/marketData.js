@@ -25,12 +25,19 @@ export class MarketDataError extends Error {
   }
 }
 
+export const OFFLINE_MESSAGE = 'Cannot perform this action because there is no internet connection.';
+
 async function fetchJson(url) {
   let res;
   try {
     res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10_000) });
   } catch (err) {
-    throw new MarketDataError(`Market data request failed: ${err.message}`);
+    // fetch only throws (rather than returning an error status) when the request
+    // never got an answer: no network, DNS failure, or a timeout.
+    if (err.name === 'TimeoutError') {
+      throw new MarketDataError('The market data service took too long to respond. Check your internet connection and try again.', 503);
+    }
+    throw new MarketDataError(OFFLINE_MESSAGE, 503);
   }
   if (res.status === 404) throw new MarketDataError('Unknown symbol', 404);
   if (!res.ok) throw new MarketDataError(`Market data provider returned ${res.status}`);

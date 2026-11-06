@@ -5,12 +5,20 @@ import { api } from '../api.js';
 export default function SymbolSearch({ onSelect, placeholder = 'Search stocks & ETFs…', autoFocus }) {
   const [q, setQ] = useState('');
   const [results, setResults] = useState([]);
+  const [error, setError] = useState(null);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
+    setError(null);
     if (!q.trim()) return setResults([]);
     const t = setTimeout(() => {
-      api.get(`/api/search?q=${encodeURIComponent(q)}`).then(setResults).catch(() => setResults([]));
+      api
+        .get(`/api/search?q=${encodeURIComponent(q)}`)
+        .then(setResults)
+        .catch((e) => {
+          setResults([]);
+          setError(e.message);
+        });
     }, 250);
     return () => clearTimeout(t);
   }, [q]);
@@ -38,6 +46,7 @@ export default function SymbolSearch({ onSelect, placeholder = 'Search stocks & 
           if (e.key === 'Escape') setOpen(false);
         }}
       />
+      {open && error && <div className="search-results search-error">{error}</div>}
       {open && results.length > 0 && (
         <ul className="search-results">
           {results.map((r) => (
